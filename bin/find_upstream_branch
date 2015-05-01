@@ -1,0 +1,119 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+############################################################################
+#
+# Name: find_upstream_branch
+# Author: Dan Berindei (http://github.com/danberindei)
+# Description: This script finds the integration branch for a task branch.
+#              Task branches start with "t_", integration branches exist 
+#              in the upstream repo as well.
+#
+############################################################################
+
+
+from __future__ import print_function
+import os
+from os import path
+import sys
+import subprocess
+import getopt
+
+
+# Configuration: The following variables need to be set.
+TOPIC_BRANCH_PREFIX="t_" # All branches whose name starts with this will be rebased against their updated branch point
+GIT="git" # Path to the git binary executable
+
+# The following variables need to be set in the git config:
+# * sync.upstreamRepo - The upstream repo, usually upstream (if you have your own fork) or origin.
+# * sync.releaseBranches - The release branches you want to sync with, must exist in the upstream repo.
+
+upstream_repo = None
+rel_branches = None
+branch = None
+
+def run_git(opts):
+  #print("### git %s" % opts, file=sys.stderr);
+  call = [GIT]
+  for o in opts.split(' '):
+    if o != '':
+      call.append(o)
+  return subprocess.check_output(call)
+
+def find_upstream_repo():
+  try:
+    upstream = run_git("config sync.upstreamRepo").strip()
+    return upstream
+  except Exception:
+    print("Can't find the upstream repo! Make sure you have configured sync.upstreamRepo in this repository.", file=sys.stderr)
+    exit(1)
+
+def find_rel_branches():
+  try:
+    release_branches = run_git("config sync.releaseBranches").split()
+    #print "Release branches are %s" % release_branches
+    return release_branches
+  except Exception:
+    print("Can't find any release branches! Make sure you have configured sync.releaseBranches in this repository.", file=sys.stderr)
+    exit(1)
+
+def parse_args():
+  global upstream_repo
+  global rel_branches
+  global branch
+
+  try:
+    opts, args = getopt.getopt(sys.argv[1:], "hu:b:", ["help", "upstream_repo=", "rel_branches="])
+  except getopt.GetoptError, err:
+    # print help information and exit:
+    print(str(err), file=sys.stderr) # will print something like "option -a not recognized"
+    sys.exit(2)
+
+  upstream_repo = None
+  rel_branches = None
+  for o, a in opts:
+    if o in ("-u", "--upstream_repo"):
+      upstream_repo = a
+    elif o in ("-b", "--rel_branches"):
+      rel_branches = a.split(',')
+    elif o in ("-h", "--help"):
+      usage()
+      sys.exit()
+    else:
+      assert False, "unhandled option"
+
+  if upstream_repo == None: upstream_repo = find_upstream_repo()
+  if rel_branches == None: rel_branches = find_rel_branches()
+
+  if (len(args) > 0): branch = args[0]
+
+def usage():
+  print("usage: ", sys.argv[0],"[-u <upstream repo>] [-b <comma separated branches>]", file=sys.stderr)
+
+def find_upstream_branch():
+  global branch
+
+  if branch == None:
+    branch = run_git("symbolic-ref --short HEAD").split('\n')[0]
+  print("Analysing topic branch %s" % branch, file=sys.stderr)
+
+  #base_branch = subprocess.check_output("git rev-list --topo-order %s %s | git symbolic-ref --short --stdin | egrep -m1 '%s'" %
+  #    (branch, " ".join(rel_branches), "|".join(rel_branches)), shell=True).strip()
+  min_commits = 1000
+  base_branch = "no_such_base_branch"
+  for relbranch in rel_branches:
+    if not relbranch.startswith(TOPIC_BRANCH_PREFIX):
+      commits = len(run_git("--no-pager log --pretty=oneline -n %d %s..%s" % (min_commits + 1, relbranch, branch)).split("\n"))
+      if commits < min_commits:
+        min_commits = commits
+        base_branch = relbranch
+
+  print(base_branch)
+
+def main():
+  parse_args()
+  find_upstream_branch()
+
+if __name__ == "__main__":
+  main()
+
